@@ -1,0 +1,23 @@
+[
+  {
+    "timestamp": "2026-03-29T08:20:40Z",
+    "ip": "192.168.10.50",
+    "event": "brute_force",
+    "severity": "HIGH",
+    "details": "5 failed logins in the last 60 seconds"
+  },
+  {
+    "timestamp": "2026-03-29T08:25:27Z",
+    "ip": "203.0.113.10",
+    "event": "credential_stuffing",
+    "severity": "MEDIUM",
+    "details": "4 distinct usernames attempted in 45 seconds"
+  },
+  {
+    "timestamp": "2026-03-29T08:25:35Z",
+    "ip": "203.0.113.10",
+    "event": "brute_force",
+    "severity": "HIGH",
+    "details": "5 failed logins in the last 60 seconds"
+  }
+]
