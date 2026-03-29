@@ -1,10 +1,23 @@
 from collections import Counter
 from types import SimpleNamespace
 from pathlib import Path
+import sys
 
 import streamlit as st
 
-from src import build_config, collect_alerts, export_incident_tickets
+# Ensure the repo root is on sys.path when Streamlit runs this file directly.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from src import build_config, collect_alerts, export_incident_tickets
+except ModuleNotFoundError:
+    # Streamlit Cloud can run from nested working dirs; add parent for safety.
+    ALT_ROOT = Path(__file__).resolve().parents[2]
+    if str(ALT_ROOT) not in sys.path:
+        sys.path.insert(0, str(ALT_ROOT))
+    from src import build_config, collect_alerts, export_incident_tickets
 
 
 st.set_page_config(
