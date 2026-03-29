@@ -23,6 +23,7 @@ def build_args(
     brute_force_severity: str,
     credential_severity: str,
 ) -> SimpleNamespace:
+    """Construct a namespace mimicking CLI args for build_config."""
     return SimpleNamespace(
         window_seconds=window_seconds,
         brute_force_threshold=brute_force_threshold,
@@ -35,6 +36,7 @@ def build_args(
 
 
 def load_log_preview(path: Path, lines: int) -> str:
+    """Read the first `lines` entries from the log for the UI preview."""
     if not path.is_file():
         return ""
     with path.open("r", encoding="utf-8") as handle:

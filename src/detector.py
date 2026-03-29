@@ -28,7 +28,7 @@ ALERT_METADATA = {
 
 
 class LogEntry:
-    """Simple holder for a parsed log row."""
+    """Represents a single line of login data after parsing."""
 
     __slots__ = ("timestamp", "event_type", "username", "ip")
 
@@ -40,6 +40,7 @@ class LogEntry:
 
 
 def parse_log_line(line: str, line_number: int) -> Optional[LogEntry]:
+    """Return a LogEntry if the line is valid; otherwise skip comments."""
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
         return None
@@ -57,7 +58,7 @@ def parse_log_line(line: str, line_number: int) -> Optional[LogEntry]:
 
 
 class BruteForceDetector:
-    """Tracks failed login attempts and raises alerts when abuse patterns appear."""
+    """Maintains sliding windows per IP and emits SOC alerts on suspicious patterns."""
 
     def __init__(self, config: Dict[str, int]) -> None:
         self.config = config
@@ -67,6 +68,7 @@ class BruteForceDetector:
         self.last_alert: Dict[str, Dict[str, datetime]] = defaultdict(dict)
 
     def process_entry(self, entry: LogEntry) -> None:
+        """Feed one log event into the detector."""
         if entry.event_type == "LOGIN_FAILED":
             self._record_failed(entry)
             self._evaluate_brute_force(entry)
@@ -76,6 +78,7 @@ class BruteForceDetector:
             self._reset_ip(entry.ip)
 
     def _record_failed(self, entry: LogEntry) -> None:
+        """Track recent failure timestamps for the IP."""
         failures = self.failed_attempts[entry.ip]
         failures.append(entry.timestamp)
         window = timedelta(seconds=self.config["window_seconds"])
@@ -83,6 +86,7 @@ class BruteForceDetector:
         self.failed_attempts[entry.ip] = [t for t in failures if t >= cutoff]
 
     def _record_username(self, entry: LogEntry) -> None:
+        """Track username diversity within the credential-stuffing window."""
         usernames = self.username_attempts[entry.ip]
         usernames.append((entry.timestamp, entry.username))
         window = timedelta(seconds=self.config["credential_window_seconds"])
@@ -90,6 +94,7 @@ class BruteForceDetector:
         self.username_attempts[entry.ip] = [(ts, user) for ts, user in usernames if ts >= cutoff]
 
     def _evaluate_brute_force(self, entry: LogEntry) -> None:
+        """Raise a brute-force alert when the recent failure count exceeds threshold."""
         failures = self.failed_attempts[entry.ip]
         threshold = self.config["brute_force_threshold"]
         if len(failures) >= threshold and self._should_alert(entry.ip, "brute_force", entry.timestamp):
@@ -100,6 +105,7 @@ class BruteForceDetector:
             self._emit_alert(entry, "brute_force", severity, details)
 
     def _evaluate_credential_stuffing(self, entry: LogEntry) -> None:
+        """Raise a credential-stuffing alert when unique username attempts spike."""
         usernames = [user for _, user in self.username_attempts[entry.ip]]
         unique_usernames = set(usernames)
         threshold = self.config["credential_threshold"]
@@ -114,10 +120,12 @@ class BruteForceDetector:
             self._emit_alert(entry, "credential_stuffing", severity, details)
 
     def _reset_ip(self, ip: str) -> None:
+        """Clear tracking state for an IP after a successful authentication."""
         self.failed_attempts.pop(ip, None)
         self.username_attempts.pop(ip, None)
 
     def _should_alert(self, ip: str, detector: str, now: datetime) -> bool:
+        """Respect cooldown so the same alert type is not repeated too often."""
         cooldown = timedelta(seconds=self.config["alert_cooldown_seconds"])
         last = self.last_alert[ip].get(detector)
         if not last:
@@ -125,6 +133,7 @@ class BruteForceDetector:
         return now - last >= cooldown
 
     def _emit_alert(self, entry: LogEntry, detector: str, severity: str, details: str) -> None:
+        """Compose the enriched alert payload and print the human-friendly line."""
         metadata = ALERT_METADATA.get(detector, {})
         alert = {
             "timestamp": entry.timestamp.strftime(LOG_TIME_FORMAT),
@@ -147,15 +156,18 @@ class BruteForceDetector:
         )
 
     def to_json(self) -> str:
+        """Serialize the collected alerts to pretty JSON."""
         return json.dumps(self.alerts, indent=2)
 
 
 def ensure_dir(path: str) -> None:
+    """Create parent directories as needed before writing output files."""
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
 
 
 def parse_log_entries(log_path: str) -> Iterable[LogEntry]:
+    """Yield parsed log entries and skip malformed rows."""
     if not os.path.isfile(log_path):
         raise FileNotFoundError(f"log file not found: {log_path}")
 
@@ -176,6 +188,7 @@ def process_entries(
     pause_seconds: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
+    """Feed entries sequentially while optionally sleeping to mimic streaming."""
     for entry in entries:
         detector.process_entry(entry)
         if pause_seconds > 0:
@@ -183,6 +196,7 @@ def process_entries(
 
 
 def persist_alerts(alerts: List[Dict[str, str]], output_path: str) -> None:
+    """Write JSON alerts to disk, creating the directory if necessary."""
     ensure_dir(output_path)
     with open(output_path, "w", encoding="utf-8") as out:
         out.write(json.dumps(alerts, indent=2))
@@ -194,6 +208,7 @@ def collect_alerts(
     pause_seconds: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> List[Dict[str, str]]:
+    """Run the detector over the log and return the alert list for reuse."""
     detector = BruteForceDetector(config)
     entries = parse_log_entries(log_path)
     process_entries(detector, entries, pause_seconds=pause_seconds, sleeper=sleeper)
@@ -203,6 +218,7 @@ def collect_alerts(
 def export_incident_tickets(
     alerts: Sequence[Dict[str, str]], ticket_path: str, prefix: str = "INC"
 ) -> None:
+    """Write the ticket payload that SOC tools can ingest for triage."""
     tickets: List[Dict[str, str]] = []
     for idx, alert in enumerate(alerts, start=1):
         tickets.append(
@@ -224,6 +240,7 @@ def export_incident_tickets(
 
 
 def run_detector(log_path: str, output_path: str, config: Dict[str, int]) -> List[Dict[str, str]]:
+    """Primary entry point for batch execution."""
     alerts = collect_alerts(log_path, config)
     persist_alerts(alerts, output_path)
     print(f"alerts written to {output_path} ({len(alerts)} entries)")
@@ -237,6 +254,7 @@ def run_streaming_detector(
     poll_seconds: float = 0.5,
     sleep_func: Callable[[float], None] = time.sleep,
 ) -> List[Dict[str, str]]:
+    """Replay logs with a controlled pause to simulate streaming ingestion."""
     alerts = collect_alerts(
         log_path, config, pause_seconds=poll_seconds, sleeper=sleep_func
     )
@@ -246,6 +264,7 @@ def run_streaming_detector(
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, int]:
+    """Translate CLI args into the detector configuration dictionary."""
     return {
         "window_seconds": args.window_seconds,
         "brute_force_threshold": args.brute_force_threshold,
@@ -260,6 +279,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, int]:
 
 
 def parse_args() -> argparse.Namespace:
+    """Setup command-line flags for thresholds, severities, modes, and outputs."""
     parser = argparse.ArgumentParser(description="Brute force attack detector for login logs")
     parser.add_argument("--log-file", default="logs/sample.log", help="path to the login event log")
     parser.add_argument("--output", default="results/alerts.json", help="where to write alerts JSON")
