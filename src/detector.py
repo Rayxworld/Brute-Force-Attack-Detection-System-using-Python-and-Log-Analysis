@@ -4,12 +4,27 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 LOG_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 KNOWN_EVENTS = {"LOGIN_SUCCESS", "LOGIN_FAILED"}
+ALERT_METADATA = {
+    "brute_force": {
+        "classification": "Brute force credential attack",
+        "mitre_id": "T1110",
+        "confidence": 0.88,
+        "recommendation": "Block the source IP, tie it to IPS/IDS rules, and review authentication logs",
+    },
+    "credential_stuffing": {
+        "classification": "Credential stuffing/username enumeration",
+        "mitre_id": "T1110",
+        "confidence": 0.72,
+        "recommendation": "Throttle requests from the IP, reset impacted accounts, and enforce MFA",
+    },
+}
 
 
 class LogEntry:
@@ -110,16 +125,26 @@ class BruteForceDetector:
         return now - last >= cooldown
 
     def _emit_alert(self, entry: LogEntry, detector: str, severity: str, details: str) -> None:
+        metadata = ALERT_METADATA.get(detector, {})
         alert = {
             "timestamp": entry.timestamp.strftime(LOG_TIME_FORMAT),
             "ip": entry.ip,
             "event": detector,
             "severity": severity,
             "details": details,
+            "classification": metadata.get("classification", detector),
+            "mitre_id": metadata.get("mitre_id", "T1110"),
+            "confidence": metadata.get("confidence", 0.5),
+            "recommendation": metadata.get(
+                "recommendation", "Investigate the IP and correlated events"
+            ),
         }
         self.alerts.append(alert)
         self.last_alert[entry.ip][detector] = entry.timestamp
-        print(f"[{alert['timestamp']}] [{severity}] {entry.ip} -> {detector}: {details}")
+        print(
+            f"[{alert['timestamp']}] [{severity}] {entry.ip} -> {alert['classification']} ({detector}, MITRE {alert['mitre_id']}): "
+            f"{details} | Recommendation: {alert['recommendation']}"
+        )
 
     def to_json(self) -> str:
         return json.dumps(self.alerts, indent=2)
@@ -128,6 +153,96 @@ class BruteForceDetector:
 def ensure_dir(path: str) -> None:
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
+
+
+def parse_log_entries(log_path: str) -> Iterable[LogEntry]:
+    if not os.path.isfile(log_path):
+        raise FileNotFoundError(f"log file not found: {log_path}")
+
+    with open(log_path, "r", encoding="utf-8") as handle:
+        for idx, raw_line in enumerate(handle, start=1):
+            try:
+                entry = parse_log_line(raw_line, idx)
+            except ValueError as exc:
+                print(f"warning: {exc}")
+                continue
+            if entry:
+                yield entry
+
+
+def process_entries(
+    detector: BruteForceDetector,
+    entries: Iterable[LogEntry],
+    pause_seconds: float = 0.0,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> None:
+    for entry in entries:
+        detector.process_entry(entry)
+        if pause_seconds > 0:
+            sleeper(pause_seconds)
+
+
+def persist_alerts(alerts: List[Dict[str, str]], output_path: str) -> None:
+    ensure_dir(output_path)
+    with open(output_path, "w", encoding="utf-8") as out:
+        out.write(json.dumps(alerts, indent=2))
+
+
+def collect_alerts(
+    log_path: str,
+    config: Dict[str, int],
+    pause_seconds: float = 0.0,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> List[Dict[str, str]]:
+    detector = BruteForceDetector(config)
+    entries = parse_log_entries(log_path)
+    process_entries(detector, entries, pause_seconds=pause_seconds, sleeper=sleeper)
+    return detector.alerts
+
+
+def export_incident_tickets(
+    alerts: Sequence[Dict[str, str]], ticket_path: str, prefix: str = "INC"
+) -> None:
+    tickets: List[Dict[str, str]] = []
+    for idx, alert in enumerate(alerts, start=1):
+        tickets.append(
+            {
+                "ticket_id": f"{prefix}-{idx:03}",
+                "alert_timestamp": alert["timestamp"],
+                "ip": alert["ip"],
+                "summary": f"{alert['severity']} {alert['classification']}",
+                "details": alert["details"],
+                "mitre_id": alert["mitre_id"],
+                "confidence": alert["confidence"],
+                "recommendation": alert["recommendation"],
+            }
+        )
+    ensure_dir(ticket_path)
+    with open(ticket_path, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(tickets, indent=2))
+    print(f"{len(tickets)} incident tickets written to {ticket_path}")
+
+
+def run_detector(log_path: str, output_path: str, config: Dict[str, int]) -> List[Dict[str, str]]:
+    alerts = collect_alerts(log_path, config)
+    persist_alerts(alerts, output_path)
+    print(f"alerts written to {output_path} ({len(alerts)} entries)")
+    return alerts
+
+
+def run_streaming_detector(
+    log_path: str,
+    output_path: str,
+    config: Dict[str, int],
+    poll_seconds: float = 0.5,
+    sleep_func: Callable[[float], None] = time.sleep,
+) -> List[Dict[str, str]]:
+    alerts = collect_alerts(
+        log_path, config, pause_seconds=poll_seconds, sleeper=sleep_func
+    )
+    persist_alerts(alerts, output_path)
+    print(f"streaming alerts persisted to {output_path} ({len(alerts)} entries)")
+    return alerts
 
 
 def build_config(args: argparse.Namespace) -> Dict[str, int]:
@@ -144,36 +259,17 @@ def build_config(args: argparse.Namespace) -> Dict[str, int]:
     }
 
 
-def run_detector(log_path: str, output_path: str, config: Dict[str, int]) -> List[Dict[str, str]]:
-    detector = BruteForceDetector(config)
-
-    if not os.path.isfile(log_path):
-        raise FileNotFoundError(f"log file not found: {log_path}")
-
-    with open(log_path, "r", encoding="utf-8") as handle:
-        for idx, raw_line in enumerate(handle, start=1):
-            try:
-                entry = parse_log_line(raw_line, idx)
-            except ValueError as exc:
-                print(f"warning: {exc}")
-                continue
-            if entry:
-                detector.process_entry(entry)
-
-    ensure_dir(output_path)
-    with open(output_path, "w", encoding="utf-8") as out:
-        out.write(detector.to_json())
-
-    print(f"alerts written to {output_path} ({len(detector.alerts)} entries)")
-    return detector.alerts
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Brute force attack detector for login logs")
     parser.add_argument("--log-file", default="logs/sample.log", help="path to the login event log")
     parser.add_argument("--output", default="results/alerts.json", help="where to write alerts JSON")
     parser.add_argument("--window-seconds", type=int, default=60, help="time window for brute force checks")
-    parser.add_argument("--brute-force-threshold", type=int, default=5, help="failed attempts to flag brute force")
+    parser.add_argument(
+        "--brute-force-threshold",
+        type=int,
+        default=5,
+        help="failed attempts to flag brute force",
+    )
     parser.add_argument(
         "--credential-window-seconds",
         type=int,
@@ -202,13 +298,42 @@ def parse_args() -> argparse.Namespace:
         default="MEDIUM",
         help="severity label for credential stuffing alerts",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["batch", "stream"],
+        default="batch",
+        help="operate in batch (default) or streaming mode",
+    )
+    parser.add_argument(
+        "--stream-poll-seconds",
+        type=float,
+        default=0.5,
+        help="pause between entries in streaming mode (0 disables sleeping)",
+    )
+    parser.add_argument(
+        "--ticket-output",
+        default="results/tickets.json",
+        help="where to write incident tickets",
+    )
+    parser.add_argument(
+        "--ticket-prefix",
+        default="INC",
+        help="prefix for ticket IDs",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     config = build_config(args)
-    alerts = run_detector(args.log_file, args.output, config)
+    if args.mode == "stream":
+        alerts = run_streaming_detector(
+            args.log_file, args.output, config, poll_seconds=args.stream_poll_seconds
+        )
+    else:
+        alerts = run_detector(args.log_file, args.output, config)
+
+    export_incident_tickets(alerts, args.ticket_output, prefix=args.ticket_prefix)
     if not alerts:
         print("no alerts generated")
 

@@ -1,33 +1,30 @@
 [
   {
-    "timestamp": "2026-03-29T08:20:40Z",
+    "ticket_id": "INC-001",
+    "alert_timestamp": "2026-03-29T08:20:40Z",
     "ip": "192.168.10.50",
-    "event": "brute_force",
-    "severity": "HIGH",
+    "summary": "HIGH Brute force credential attack",
     "details": "5 failed logins in the last 60 seconds",
-    "classification": "Brute force credential attack",
     "mitre_id": "T1110",
     "confidence": 0.88,
     "recommendation": "Block the source IP, tie it to IPS/IDS rules, and review authentication logs"
   },
   {
-    "timestamp": "2026-03-29T08:25:27Z",
+    "ticket_id": "INC-002",
+    "alert_timestamp": "2026-03-29T08:25:27Z",
     "ip": "203.0.113.10",
-    "event": "credential_stuffing",
-    "severity": "MEDIUM",
+    "summary": "MEDIUM Credential stuffing/username enumeration",
     "details": "4 distinct usernames attempted in 45 seconds",
-    "classification": "Credential stuffing/username enumeration",
     "mitre_id": "T1110",
     "confidence": 0.72,
     "recommendation": "Throttle requests from the IP, reset impacted accounts, and enforce MFA"
   },
   {
-    "timestamp": "2026-03-29T08:25:35Z",
+    "ticket_id": "INC-003",
+    "alert_timestamp": "2026-03-29T08:25:35Z",
     "ip": "203.0.113.10",
-    "event": "brute_force",
-    "severity": "HIGH",
+    "summary": "HIGH Brute force credential attack",
     "details": "5 failed logins in the last 60 seconds",
-    "classification": "Brute force credential attack",
     "mitre_id": "T1110",
     "confidence": 0.88,
     "recommendation": "Block the source IP, tie it to IPS/IDS rules, and review authentication logs"

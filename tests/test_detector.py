@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import os
+import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-import unittest
 
 from src import (
     BruteForceDetector,
     LOG_TIME_FORMAT,
     build_config,
+    export_incident_tickets,
     parse_log_line,
+    run_streaming_detector,
 )
 
 
@@ -57,6 +61,11 @@ class DetectorTests(unittest.TestCase):
         self.assertIn(("203.0.113.10", "credential_stuffing"), events)
         self.assertIn(("203.0.113.10", "brute_force"), events)
         self.assertNotIn(("198.51.100.22", "brute_force"), events)
+        annotation = next(
+            alert for alert in detector.alerts if alert["ip"] == "192.168.10.50" and alert["event"] == "brute_force"
+        )
+        self.assertEqual("Brute force credential attack", annotation["classification"])
+        self.assertTrue(all(0 <= alert["confidence"] <= 1 for alert in detector.alerts))
 
     def test_success_clears_inflight_bruteforce_state(self) -> None:
         base = datetime.strptime("2026-03-29T09:00:00Z", LOG_TIME_FORMAT)
@@ -75,6 +84,7 @@ class DetectorTests(unittest.TestCase):
         alert = detector.alerts[0]
         self.assertEqual(ip, alert["ip"])
         self.assertEqual("brute_force", alert["event"])
+        self.assertIn("Block", alert["recommendation"])
 
     def test_slow_attack_stays_below_window(self) -> None:
         ip = "203.0.113.50"
@@ -89,5 +99,42 @@ class DetectorTests(unittest.TestCase):
         detector = self._process_lines(lines)
         self.assertEqual(0, len(detector.alerts))
 
+    def test_streaming_mode_reuses_log_replay(self) -> None:
+        config = build_config(DEFAULT_ARGS)
+        tmpdir = os.path.join("tests", "tmp_stream")
+        os.makedirs(tmpdir, exist_ok=True)
+        output_path = os.path.join(tmpdir, "stream_alerts.json")
+        alerts = run_streaming_detector(
+            "logs/sample.log", output_path, config, poll_seconds=0, sleep_func=lambda _: None
+        )
+        self.assertGreater(len(alerts), 0)
+        self.assertTrue(os.path.exists(output_path))
+        with open(output_path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+        self.assertEqual(len(alerts), len(stored))
+        os.remove(output_path)
 
-import unittest
+    def test_ticket_exporter_persists_metadata(self) -> None:
+        alerts = [
+            {
+                "timestamp": "2026-03-29T08:20:40Z",
+                "ip": "192.168.10.50",
+                "event": "brute_force",
+                "severity": "HIGH",
+                "details": "5 failed logins in the last 60 seconds",
+                "classification": "Brute force credential attack",
+                "mitre_id": "T1110",
+                "confidence": 0.88,
+                "recommendation": "Block the source IP, tie it to IPS/IDS rules, and review authentication logs",
+            }
+        ]
+        tmpdir = os.path.join("tests", "tmp_tickets")
+        os.makedirs(tmpdir, exist_ok=True)
+        ticket_path = os.path.join(tmpdir, "tickets.json")
+        export_incident_tickets(alerts, ticket_path, prefix="TEST")
+        with open(ticket_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertEqual(1, len(data))
+        self.assertEqual("TEST-001", data[0]["ticket_id"])
+        self.assertEqual(alerts[0]["confidence"], data[0]["confidence"])
+        os.remove(ticket_path)
