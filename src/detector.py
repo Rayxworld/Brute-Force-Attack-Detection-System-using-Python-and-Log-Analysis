@@ -7,7 +7,7 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 LOG_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 KNOWN_EVENTS = {"LOGIN_SUCCESS", "LOGIN_FAILED"}
